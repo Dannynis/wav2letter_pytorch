@@ -20,8 +20,8 @@ import timing
 from torch.utils.data import BatchSampler, SequentialSampler
 
 parser = argparse.ArgumentParser(description='Wav2Letter training')
-parser.add_argument('--train-manifest',help='path to train manifest csv', default='data/train.csv')
-parser.add_argument('--val-manifest',help='path to validation manifest csv',default='data/validation.csv')
+parser.add_argument('--train-manifest',help='path to train manifest csv', default='/media/dan/Disk/ml+dl+dsp/wav2letter_pytorch/data_example/train_manifest.txt')
+parser.add_argument('--val-manifest',help='path to validation manifest csv',default='/media/dan/Disk/ml+dl+dsp/wav2letter_pytorch/data_example/val_manifest.txt')
 parser.add_argument('--sample-rate',default=8000,type=int,help='Sample rate')
 parser.add_argument('--window-size',default=.02,type=float,help='Window size for spectrogram in seconds')
 parser.add_argument('--window-stride',default=.01,type=float,help='Window sstride for spectrogram in seconds')
@@ -127,7 +127,7 @@ def compute_error_rates(model,dataset,greedy_decoder,kwargs):
         greedy_wer = np.zeros(num_samples)
         for idx, (data) in enumerate(dataset):
             inputs, targets, file_paths, text = data
-            out = model(torch.FloatTensor(inputs).unsqueeze(0))
+            out = model(torch.FloatTensor(inputs).unsqueeze(0).to(device))
             out = out.transpose(1,0)
             out_sizes = torch.IntTensor([out.size(0)])
             if idx == index_to_print and kwargs['print_samples']:
