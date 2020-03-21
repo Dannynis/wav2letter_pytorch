@@ -40,7 +40,9 @@ class SpectrogramDataset(Dataset):
         self.window = audio_conf['window']
         self.window = windows.get(audio_conf['window'], windows['hamming'])
         self.labels_map = dict([(labels[i],i) for i in range(len(labels))])
-        
+        self.manifest_file_dir = os.path.dirname(manifest_filepath)
+
+
     def __getitem__(self, index):
         sample = self.ids[index]
         audio_path, transcript = sample[0], sample[1]
@@ -49,6 +51,7 @@ class SpectrogramDataset(Dataset):
         return spect, target, audio_path, transcript
     
     def parse_audio(self,audio_path):
+        os.chdir(self.manifest_file_dir)
         y = load_audio(audio_path)
         n_fft = int(self.sample_rate * self.window_size)
         win_length = n_fft
