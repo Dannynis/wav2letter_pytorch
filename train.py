@@ -115,6 +115,7 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
 
 def evaluate(model,dataset,greedy_decoder,epoch,kwargs):
     greedy_cer, greedy_wer= compute_error_rates(model, dataset, greedy_decoder, kwargs)
+    print ('greedy cer:{} greedy wer: {}'.format(greedy_cer.mean(),greedy_wer.mean()))
     log_error_rates_to_tensorboard(epoch,greedy_cer.mean(),greedy_wer.mean())
     
 def compute_error_rates(model,dataset,greedy_decoder,kwargs):
@@ -136,6 +137,8 @@ def compute_error_rates(model,dataset,greedy_decoder,kwargs):
                 print(''.join(map(lambda i: model.labels[i], torch.argmax(out.squeeze(), 1))))
             
             greedy_texts = greedy_decoder.decode(probs=out.transpose(1,0), sizes=out_sizes)
+            if idx < 5:
+                print ('original text: {} greedy text: {}'.format(text,greedy_texts[0]))
             greedy_cer[idx] = greedy_decoder.cer_ratio(text, greedy_texts[0])
             greedy_wer[idx] = greedy_decoder.wer_ratio(text, greedy_texts[0])
     return greedy_cer, greedy_wer
