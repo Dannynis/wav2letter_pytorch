@@ -43,6 +43,9 @@ parser.add_argument('--print-samples',default=False,action='store_true',help='Pr
 parser.add_argument('--continue-from',default='',type=str,help='Continue training a saved model')
 parser.add_argument('--cuda',default=False,action='store_true',help='Enable training and evaluation with GPU')
 parser.add_argument('--epochs-per-save',default=5,type=int,help='How many epochs before saving models')
+parser.add_argument('--epochs-per-eval',default=5,type=int,help='How many epochs before evaluating the WER and CER')
+parser.add_argument('--max-models-history',default=5,type=int,help='How many models to keep saved before overwriting')
+
 def get_audio_conf(args):
     audio_conf = {k:args[k] for k in ['sample_rate','window_size','window_stride','window']}
     return audio_conf
@@ -93,7 +96,7 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
         with timing.EpochTimer(epoch,_log_to_tensorboard) as et:
             model.train()
             total_loss = 0
-            for idx, data in et.across_epoch('Data Loading', tqdm.tqdm(enumerate(train_batch_loader))):
+            for idx, data in et.across_epoch('Data Loading', tqdm.tqdm(enumerate(train_batcxh_loader))):
                 inputs, input_lengths, targets, target_lengths, file_paths, texts = data
                 with et.timed_action('Model execution'):
                     out = model(torch.FloatTensor(inputs).to(device))
@@ -106,18 +109,20 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
                     optimizer.step()
                 total_loss += loss.mean().item()
             log_loss_to_tensorboard(epoch, total_loss / batch_count)
-            evaluate(model,eval_dataset,greedy_decoder,epoch,kwargs)
+            if epoch != 0 and epoch % int(kwargs['epochs_per_eval']) == 0:
+                evaluate(model,'eval',eval_dataset, greedy_decoder, epoch, kwargs)
+                evaluate(model,'train',eval_dataset, greedy_decoder, epoch, kwargs)
             if epoch != 0 and epoch % int(kwargs['epochs_per_save']) == 0:
-                save_epoch_model(model,epoch, kwargs['model_dir'])
+                save_epoch_model(model,epoch% kwargs['max_models_history'], kwargs['model_dir'])
     if kwargs['model_dir']:
         save_model(model, kwargs['model_dir']+'/final.pth')
     print('Finished at %s' % time.asctime())
     
 
-def evaluate(model,dataset,greedy_decoder,epoch,kwargs):
+def evaluate(model,setname,dataset,greedy_decoder,epoch,kwargs):
     greedy_cer, greedy_wer= compute_error_rates(model, dataset, greedy_decoder, kwargs)
-    print ('greedy cer:{} greedy wer: {}'.format(greedy_cer.mean(),greedy_wer.mean()))
-    log_error_rates_to_tensorboard(epoch,greedy_cer.mean(),greedy_wer.mean())
+    print (setname +' greedy cer:{} greedy wer: {}'.format(greedy_cer.mean(),greedy_wer.mean()))
+    log_error_rates_to_tensorboard(epoch,setname,greedy_cer.mean(),greedy_wer.mean())
     
 def compute_error_rates(model,dataset,greedy_decoder,kwargs):
     device = 'cuda:0' if torch.cuda.is_available() and kwargs['cuda'] else 'cpu'
@@ -155,8 +160,8 @@ def log_loss_to_tensorboard(epoch,avg_loss):
     print('Total loss: %f' % avg_loss)
     _log_to_tensorboard(epoch,{'Avg Train Loss': avg_loss})
     
-def log_error_rates_to_tensorboard(epoch,greedy_cer,greedy_wer):
-    _log_to_tensorboard(epoch,{'G_CER': greedy_cer, 'G_WER': greedy_wer})
+def log_error_rates_to_tensorboard(epoch,set,greedy_cer,greedy_wer):
+    _log_to_tensorboard(epoch,{set+'_'+'G_CER': greedy_cer, set+'_'+'G_WER': greedy_wer})
     
 def _log_to_tensorboard(epoch,values,tensorboard_id='Wav2Letter training'):
     if _tensorboard_writer:
