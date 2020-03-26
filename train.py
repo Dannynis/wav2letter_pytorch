@@ -61,6 +61,9 @@ def init_model(kwargs):
         model = Wav2Letter.load_model(kwargs['continue_from'])
     else:
         model = init_new_model(kwargs)
+    pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print('model contains {} trainable params'.format(pytorch_total_params))
+    print (model)
     return model
 
 def init_datasets(audio_conf,labels, kwargs):
