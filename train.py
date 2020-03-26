@@ -85,7 +85,7 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
     device = 'cuda:0' if torch.cuda.is_available() and kwargs['cuda'] else 'cpu'
     model.to(device)
     greedy_decoder = GreedyDecoder(model.labels)
-    criterion = nn.CTCLoss(blank=0,reduction='none')
+    criterion = nn.CTCLoss(blank=0,reduction='mean')
     parameters = model.parameters()
     optimizer = torch.optim.SGD(parameters,lr=kwargs['lr'],momentum=kwargs['momentum'],nesterov=True,weight_decay=1e-5)
     scaling_factor = model.get_scaling_factor()
@@ -105,9 +105,9 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
                 with et.timed_action('Loss and BP'):
                     loss = criterion(out, targets.to(device), torch.IntTensor(output_lengths), torch.IntTensor(target_lengths))
                     optimizer.zero_grad()
-                    loss.mean().backward()
+                    loss.backward()
                     optimizer.step()
-                total_loss += loss.mean().item()
+                total_loss += loss.item()
             log_loss_to_tensorboard(epoch, total_loss / batch_count)
             if epoch % int(kwargs['epochs_per_eval']) == 0:
                 evaluate(model,'eval',eval_dataset, greedy_decoder, epoch, kwargs)
