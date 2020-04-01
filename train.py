@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import librosa
 import torch
 import torch.nn as nn
 import numpy as np
@@ -14,6 +15,7 @@ import glob
 
 from data import label_sets
 from model import Wav2Letter
+from jasper import MiniJasper
 from data.data_loader import SpectrogramDataset, BatchAudioDataLoader
 from decoder import GreedyDecoder, PrefixBeamSearchLMDecoder
 import timing
@@ -36,8 +38,8 @@ parser.add_argument('--log-dir',default='visualize/wav2letter',type=str,help='Di
 parser.add_argument('--seed',type=int,default=1234)
 parser.add_argument('--id',default='Wav2letter training',help='Tensorboard id')
 parser.add_argument('--model-dir',default='models/wav2letter',help='Directory to save models. Set as empty, or use --no-model-save to disable saving.')
-parser.add_argument('--no-model-save',dest='model-dir',action='store_const',const='')
-parser.add_argument('--layers',default=16,type=int,help='Number of Conv1D blocks, between 3 and 16. Last 2 layers are always added.')
+parser.add_argument('--no-model-save',dest='model_dir',action='store_const',const='')
+parser.add_argument('--layers',default=1,type=int,help='Number of Conv1D blocks, between 1 and 16. 2 Additional last layers are always added.')
 parser.add_argument('--labels',default='english',type=str,help='Name of label set to use')
 parser.add_argument('--print-samples',default=False,action='store_true',help='Print samples from each epoch')
 parser.add_argument('--continue-from',default='',type=str,help='Continue training a saved model')
@@ -53,7 +55,8 @@ def get_audio_conf(args):
 def init_new_model(kwargs):
     labels = label_sets.labels_map[kwargs['labels']]
     audio_conf = get_audio_conf(kwargs)
-    model = Wav2Letter(labels=labels,audio_conf=audio_conf,mid_layers=kwargs['layers'])
+    #model = Wav2Letter(labels=labels,audio_conf=audio_conf,mid_layers=kwargs['layers'])
+    model = MiniJasper(labels=labels,audio_conf=audio_conf,mid_layers=kwargs['layers'])
     return model
 
 def init_model(kwargs):
@@ -67,10 +70,10 @@ def init_model(kwargs):
     return model
 
 def init_datasets(audio_conf,labels, kwargs):
-    train_dataset = SpectrogramDataset(audio_conf,kwargs['train_manifest'], labels)
+    train_dataset = SpectrogramDataset(kwargs['train_manifest'], audio_conf, labels)
     batch_sampler = BatchSampler(SequentialSampler(train_dataset), batch_size=kwargs['batch_size'], drop_last=False)
     train_batch_loader = BatchAudioDataLoader(train_dataset, batch_sampler=batch_sampler)
-    eval_dataset = SpectrogramDataset(audio_conf,kwargs['val_manifest'], labels)
+    eval_dataset = SpectrogramDataset(kwargs['val_manifest'], audio_conf, labels)
     return train_dataset, train_batch_loader, eval_dataset
     
 
@@ -78,6 +81,7 @@ def train(**kwargs):
     print('starting at %s' % time.asctime())
     model = init_model(kwargs)
     train_dataset, train_batch_loader, eval_dataset = init_datasets(model.audio_conf, model.labels, kwargs)
+    print('Model and datasets initialized')
     if kwargs['tensorboard']:
         setup_tensorboard(kwargs['log_dir'])
     training_loop(model,kwargs, train_dataset, train_batch_loader, eval_dataset)   
@@ -88,30 +92,33 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
     device = 'cuda:0' if torch.cuda.is_available() and kwargs['cuda'] else 'cpu'
     model.to(device)
     greedy_decoder = GreedyDecoder(model.labels)
-    criterion = nn.CTCLoss(blank=0,reduction='mean')
+    criterion = nn.CTCLoss(blank=0,reduction='none')
     parameters = model.parameters()
     optimizer = torch.optim.SGD(parameters,lr=kwargs['lr'],momentum=kwargs['momentum'],nesterov=True,weight_decay=1e-5)
     scaling_factor = model.get_scaling_factor()
     epochs=kwargs['epochs']
-    print('Train dataset size:%d' % len(train_dataset.ids))
+    print('Train dataset size:%d' % len(train_dataset))
     batch_count = math.ceil(len(train_dataset) / kwargs['batch_size'])
     for epoch in range(epochs):
         with timing.EpochTimer(epoch,_log_to_tensorboard) as et:
             model.train()
             total_loss = 0
-            for idx, data in et.across_epoch('Data Loading', tqdm.tqdm(enumerate(train_batch_loader),total = batch_count)):
+            for idx, data in et.across_epoch('Data Loading time', tqdm.tqdm(enumerate(train_batch_loader),total=batch_count)):
                 inputs, input_lengths, targets, target_lengths, file_paths, texts = data
-                with et.timed_action('Model execution'):
-                    out = model(torch.FloatTensor(inputs).to(device))
+                with et.timed_action('Model execution time'):
+                    out = model((torch.FloatTensor(inputs).to(device),torch.IntTensor(input_lengths)))
                 out = out.transpose(1,0)
                 output_lengths = [l // scaling_factor for l in input_lengths]
-                with et.timed_action('Loss and BP'):
+                with et.timed_action('Loss and BP time'):
                     loss = criterion(out, targets.to(device), torch.IntTensor(output_lengths), torch.IntTensor(target_lengths))
                     optimizer.zero_grad()
-                    loss.backward()
+                    loss.mean().backward()
                     optimizer.step()
-                total_loss += loss.item()
+                total_loss += loss.mean().item()
             log_loss_to_tensorboard(epoch, total_loss / batch_count)
+            evaluate(model,eval_dataset,greedy_decoder,epoch,kwargs)
+            if epoch != 0 and epoch % kwargs['epochs_per_save'] == 0 :
+                save_epoch_model(model,epoch, kwargs['model_dir'])
             if epoch % int(kwargs['epochs_per_eval']) == 0:
                 evaluate(model,'eval',eval_dataset, greedy_decoder, epoch, kwargs)
                 evaluate(model,'train',train_dataset, greedy_decoder, epoch, kwargs)
@@ -137,7 +144,7 @@ def compute_error_rates(model,dataset,greedy_decoder,kwargs):
         greedy_wer = np.zeros(num_samples)
         for idx, (data) in enumerate(dataset):
             inputs, targets, file_paths, text = data
-            out = model(torch.FloatTensor(inputs).unsqueeze(0).to(device))
+            out = model((torch.FloatTensor(inputs,).unsqueeze(0).to(device), torch.IntTensor([inputs.shape[1]])))
             out = out.transpose(1,0)
             out_sizes = torch.IntTensor([out.size(0)])
             if idx == index_to_print and kwargs['print_samples']:
@@ -184,7 +191,7 @@ def save_epoch_model(model, epoch, path):
     dirname = os.path.splitext(path)[0]
     model_path = os.path.join(dirname,'epoch_%d.pth' % epoch)
     save_model(model, model_path)
-    old_files = sorted(glob.glob(dirname+'\\*'),key=os.path.getmtime,reverse=True)[10:]
+    old_files = sorted(glob.glob(dirname+'/epoch_*'),key=os.path.getmtime,reverse=True)[10:]
     for file in old_files:
         os.remove(file)
     

@@ -15,16 +15,13 @@ Creates a network based on the [Wav2Letter](https://arxiv.org/abs/1609.03193) ar
 Several libraries are needed to be installed for training to work. I will assume that everything is being installed in
 an Anaconda installation on Ubuntu.
 
-Install [PyTorch](https://github.com/pytorch/pytorch#installation) if you haven't already.
+Install [PyTorch](https://github.com/pytorch/pytorch#installation).
 
-Install pytorch audio (if on windows, see note):
-```
-sudo apt-get install sox libsox-dev libsox-fmt-all
-git clone https://github.com/pytorch/audio.git
-cd audio
-pip install cffi
-python setup.py install
-```
+Install [Librosa](https://librosa.github.io/librosa/index.html).
+
+For tensorboard training visualization, install [tensorboardX](https://github.com/lanpa/tensorboardX). This is optional, but recommended.
+
+For data preparation, download or install [FFmpeg](https://www.ffmpeg.org/). 
 
 Finally clone this repo and run this within the repo:
 ```
@@ -32,21 +29,25 @@ pip install -r requirements.txt
 ```
 ## Windows installation
 
-As of March 11, the repo runs correctly on a Windows 10 machine. We expect to keep Windows support for the forseeable future.
+As of March 24, 2020, the repo runs correctly on a Windows 10 machine. We expect to keep Windows support for the forseeable future.
 
 However, Windows is recommended only for spot checks - for actual training, use Linux.
 
 We recommend installing PyTorch with an Anaconda installation, and Microsoft Visual C++ Build Tools for kenlm and python-levenshtein.
 
-Tensorboard has not been tested on windows yet, so we recommend running with --no-tensorboard.
-
-As of March 11, torchaudio does not support Windows, however it is [in progress](https://github.com/pytorch/audio/issues/425)
+FFmpeg for windows is a portable binary [from here](https://www.ffmpeg.org/download.html#build-windows)
 
 # Usage
 
-### Custom Dataset
+### LibriSpeech Dataset
+Download the dataset you want to use from [openslr](http://www.openslr.org/12/).
+Run ```data/prepare_librispeech.py``` on the downloaded tar.gz file.
 
-To create a custom dataset you must create a CSV file containing the locations of the training data. This has to be in the format of:
+For example:  ```python wav2letter_torch/data/prep_librispeech.py --zip_file dev-clean.tar.gz --extracted_dir dev-clean --target_dir dataset --manifest_path df.csv```
+
+### Custom Datasets
+To create a custom dataset, create a CSV file containing audio location and text pairs.
+This can be in the following format:
 
 ```
 /path/to/audio.wav,transcription
@@ -54,7 +55,15 @@ To create a custom dataset you must create a CSV file containing the locations o
 ...
 ```
 
-The first path is to the audio file, and the second is the text containing the transcript on one line. This can then be used as stated below.
+Alternatively, create a Pandas Dataframe with the columns ```filepath, text``` and save it using ``` df.to_csv(path) ```.
+
+Note that only WAV files are supported. If you use a sample rate other than 8K, specify it using ```--sample-rate```.
+
+### Different languages
+In addition to English, Hebrew, and Farsi are supported.
+
+To use, run with ```--labels hebrew```. Note that some terminals and consoles do not display UTF-8 properly.
+
 
 ## Training
 
@@ -69,6 +78,10 @@ There is [Tensorboard](https://github.com/lanpa/tensorboard-pytorch) support to 
 ```
 python train.py --tensorboard --logdir log_dir/ # Make sure the Tensorboard instance is made pointing to this log directory
 ```
+### Continue training existing model
+To continue training from an existing model, run with ```--continue-from MODEL_PATH```.
+
+Note that ```--layers, --labels, --window_size, --window_stride, --window, --sample_rate``` are all determined from the configuration of the loaded model, and are ignored. 
 
 ## Testing/Inference
 
@@ -77,6 +90,20 @@ To evaluate a trained model on a test set (has to be in the same format as the t
 ```
 python test.py --model-path models/wav2Letter.pth --test-manifest /path/to/test_manifest.csv --cuda
 ```
+
+To see the decoded outputs compared to the test data, run with either ```--print-samples``` or ```print-all```.
+
+You can use a LM during decoding. The LM is expected to be a valid ARPA model, loaded with kenlm. Add ```--lm-path``` to use it. See ```--beam-search-params``` to fine tune your parameters for beam search.
+
+## Differences from article
+
+There are some subtle differences between this implementation and the original.
+
+We use CTC loss instead of ASG, which leads to a small difference in labels definition and output interpretation.
+
+We currently use spectrogram features instead of MFCC, which achieved the best results in the original article.
+
+Some of the network hyperparameters are different - convolution kernel sizes, strides, and default sample rate.
 
 ## Acknowledgements
 This work was originally based off [Silversparro's Wav2Letter](https://github.com/silversparro/wav2letter.pytorch).
