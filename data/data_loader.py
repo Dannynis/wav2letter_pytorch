@@ -36,10 +36,14 @@ class SpectrogramDataset(Dataset):
         '''
         super(SpectrogramDataset, self).__init__()
         prefix_df = pd.read_csv(manifest_filepath,index_col=0,nrows=2)
-        if not {'filepath','text'}.issubset(prefix_df.columns):
+        if not {'filepath','text'}.issubset(prefix_df.columns) and not {'file_name','text'}.issubset(prefix_df.columns):
             self.df = pd.read_csv(manifest_filepath,header=None,names=['filepath','text'])
         else:
             self.df = pd.read_csv(manifest_filepath,index_col=0)
+
+        if  {'file_name','text'}.issubset(prefix_df.columns):
+            self.df['filepath'] = self.df['file_name'].apply(lambda x: os.path.join(os.path.dirname(manifest_filepath), x+'.wav'))
+
         self.size = len(self.df)
         self.window_stride = audio_conf['window_stride']
         self.window_size = audio_conf['window_size']
@@ -49,7 +53,6 @@ class SpectrogramDataset(Dataset):
         self.labels_map = dict([(labels[i],i) for i in range(len(labels))])
         self.validate_sample_rate()
 
-        self.manifest_file_dir = os.path.dirname(manifest_filepath)
 
 
     def __getitem__(self, index):
@@ -63,7 +66,6 @@ class SpectrogramDataset(Dataset):
         return spect, target, audio_path, transcript
     
     def parse_audio(self,audio_path):
-        os.chdir(self.manifest_file_dir)
         y = load_audio(audio_path)
         n_fft = int(self.sample_rate * self.window_size)
         win_length = n_fft
