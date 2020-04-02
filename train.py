@@ -50,9 +50,11 @@ parser.add_argument('--arc',default='quartz',type=str,help='Network architecture
 parser.add_argument('--optimizer',default='sgd',type=str,help='Optimizer to use. can be either "sgd" (default) or "novograd". Note that novograd only accepts --lr parameter.')
 parser.add_argument('--epochs-per-eval',default=5,type=int,help='How many epochs before evaluating the WER and CER')
 parser.add_argument('--max-models-history',default=5,type=int,help='How many models to keep saved before overwriting')
+parser.add_argument('--spec-save-folder',default='./specs_dir',type=str,help='where to dump the specs after preprocessing')
+
 
 def get_audio_conf(args):
-    audio_conf = {k:args[k] for k in ['sample_rate','window_size','window_stride','window']}
+    audio_conf = {k:args[k] for k in ['sample_rate','window_size','window_stride','window','spec_save_folder']}
     return audio_conf
 
 def init_new_model(arc,kwargs):

@@ -95,21 +95,21 @@ class Wav2Letter(nn.Module):
         else:
             x = F.softmax(x,dim=-1)
         return x
-    
+
     def get_scaling_factor(self):
         strides = []
         for module in self.conv1ds.children():
             strides.append(module.conv1.stride[0])
         return np.prod(strides)
-    
+
     @classmethod
     def load_model(cls,path):
         package = torch.load(path,map_location = lambda storage, loc: storage)
         return cls.load_model_package(package)
-    
+
     @classmethod
     def load_model_package(cls,package):
-        model = cls(labels=package['labels'],audio_conf=package['audio_conf'],mid_layers=package['layers'],package.get('input_size'))
+        model = cls(labels=package['labels'],audio_conf=package['audio_conf'],mid_layers=package['layers'],input_size=package.get('input_size'))
         model.load_state_dict(package['state_dict'])
         return model
 
@@ -119,7 +119,7 @@ class Wav2Letter(nn.Module):
                 'audio_conf':model.audio_conf,
                 'labels':model.labels,
                 'layers':model.mid_layers,
-                'input_size':model.input_size
+                'input_size':model.input_size,
                 'state_dict':model.state_dict()
                 }
         return package
@@ -127,4 +127,3 @@ class Wav2Letter(nn.Module):
     @staticmethod
     def get_param_size(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
-    

@@ -12,6 +12,10 @@ from scipy.io import wavfile
 import torch
 from torch.utils.data import Dataset,DataLoader
 import pandas as pd
+import tqdm
+import multiprocessing.dummy
+import pickle
+import datetime
 
 windows = {'hamming': scipy.signal.hamming, 'hann': scipy.signal.hann, 'blackman': scipy.signal.blackman,'bartlett':scipy.signal.bartlett}
 
@@ -52,14 +56,36 @@ class SpectrogramDataset(Dataset):
         self.window = windows.get(audio_conf['window'], windows['hamming'])
         self.labels_map = dict([(labels[i],i) for i in range(len(labels))])
         self.validate_sample_rate()
+        self.audio_conf = audio_conf
         self.preprocess_spectrograms()
 
+    def async_preprocess_spectrogram(self,x):
+        audio_path = self.df.filepath.iloc[x]
+        return self.parse_audio(audio_path)
+
     def preprocess_spectrograms(self):
-        self.spects = {}
-        for i in range(self.size):
-            audio_path = self.df.filepath.iloc[i]
-            spect = self.parse_audio(audio_path)
-            self.spects[i] = spect
+
+        saved_specs_folder = self.audio_conf['spec_save_folder']
+        if not os.path.exists(saved_specs_folder):
+            os.makedirs(saved_specs_folder)
+        saved_specs = os.listdir(saved_specs_folder)
+        if len(saved_specs) != 0:
+            restored_file_name =saved_specs[-1]
+            print('restoring spectrograms from {}'.format(restored_file_name))
+            with open(os.path.join(saved_specs_folder,restored_file_name)) as f:
+                self.spects = pickle.load(f)
+        else:
+            print ('running multiprocesses spec extraction')
+            pool = multiprocessing.dummy.Pool(4)
+            self.spects = list(tqdm.tqdm(pool.imap(self.async_preprocess_spectrogram,range(self.size)),total=self.size))
+            current_spectrograms_file_name = str(datetime.now()).replace(' ','_').split('.')[0]
+            with open(os.path.join(saved_specs_folder,current_spectrograms_file_name)) as f:
+                pickle.dump( self.spects,f)
+
+        # for i in tqdm.tqdm(range(self.size)):
+        #     audio_path = self.df.filepath.iloc[i]
+        #     spect = self.parse_audio(audio_path)
+        #     self.spects[i] = spect
 
     def __getitem__(self, index):
         sample = self.df.iloc[index]
