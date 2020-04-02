@@ -47,14 +47,15 @@ parser.add_argument('--continue-from',default='',type=str,help='Continue trainin
 parser.add_argument('--cuda',default=False,action='store_true',help='Enable training and evaluation with GPU')
 parser.add_argument('--epochs-per-save',default=5,type=int,help='How many epochs before saving models')
 parser.add_argument('--arc',default='quartz',type=str,help='Network architecture to use. Can be either "quartz" (default) or "wav2letter"')
-parser.add_argument('--optimizer',default='sgd',type=str,help='Optimizer to use. can be either "sgd" (default) or "novograd". Note that novograd only accepts --lr parameter.')
+parser.add_argument('--optimizer',default='novograd',type=str,help='Optimizer to use. can be either "sgd" (default) or "novograd". Note that novograd only accepts --lr parameter.')
 parser.add_argument('--epochs-per-eval',default=5,type=int,help='How many epochs before evaluating the WER and CER')
 parser.add_argument('--max-models-history',default=5,type=int,help='How many models to keep saved before overwriting')
+parser.add_argument('--preprocess-specs',default=False,help='To process all the spectrograms before trainng')
 parser.add_argument('--spec-save-folder',default='./specs_dir',type=str,help='where to dump the specs after preprocessing')
 
 
 def get_audio_conf(args):
-    audio_conf = {k:args[k] for k in ['sample_rate','window_size','window_stride','window','spec_save_folder']}
+    audio_conf = {k:args[k] for k in ['sample_rate','window_size','window_stride','window','preprocess_specs','spec_save_folder']}
     return audio_conf
 
 def init_new_model(arc,kwargs):
@@ -123,6 +124,8 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
                 output_lengths = [l // scaling_factor for l in input_lengths]
                 with et.timed_action('Loss and BP time'):
                     loss = criterion(out, targets.to(device), torch.IntTensor(output_lengths), torch.IntTensor(target_lengths))
+                    if idx % 50 == 0:
+                        print (loss.mean().item())
                     optimizer.zero_grad()
                     loss.mean().backward()
                     optimizer.step()

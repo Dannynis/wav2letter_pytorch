@@ -16,6 +16,8 @@ import tqdm
 import multiprocessing.dummy
 import pickle
 import datetime
+import torchaudio
+
 
 windows = {'hamming': scipy.signal.hamming, 'hann': scipy.signal.hann, 'blackman': scipy.signal.blackman,'bartlett':scipy.signal.bartlett}
 
@@ -57,7 +59,11 @@ class SpectrogramDataset(Dataset):
         self.labels_map = dict([(labels[i],i) for i in range(len(labels))])
         self.validate_sample_rate()
         self.audio_conf = audio_conf
-        self.preprocess_spectrograms()
+        self.spects = None
+        #todo export nfft and n mels to config
+        self.torch_mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate,n_fft=512,n_mels=64)
+        if self.audio_conf['preprocess_specs']:
+            self.preprocess_spectrograms()
 
     def async_preprocess_spectrogram(self,x):
         audio_path = self.df.filepath.iloc[x]
@@ -93,8 +99,11 @@ class SpectrogramDataset(Dataset):
         if 'א' in self.labels_map: #Hebrew!
             import data.language_specific_tools
             transcript = data.language_specific_tools.hebrew_final_to_normal(transcript)
-        #spect = self.parse_audio(audio_path)
-        spect = self.spects[index]
+        #if the specs were generated during preprocess use them otherwise generate during traning
+        if self.spects != None:
+            spect = self.spects[index]
+        else:
+            spect = self.parse_audio(audio_path)
         target = list(filter(None,[self.labels_map.get(x) for x in list(transcript)]))
         return spect, target, audio_path, transcript
     
@@ -104,10 +113,13 @@ class SpectrogramDataset(Dataset):
         win_length = n_fft
         hop_length = int(self.sample_rate * self.window_stride)
         
-        D = librosa.stft(y, n_fft=n_fft, hop_length = hop_length, win_length=win_length,window=self.window)
-        
-        spect, phase = librosa.magphase(D)
-        
+        # D = librosa.stft(y, n_fft=n_fft, hop_length = hop_length, win_length=win_length,window=self.window)
+        # spect, phase = librosa.magphase(D)
+
+        # spect = librosa.feature.melspectrogram(y, n_fft=512, hop_length = hop_length,
+        #                                    win_length=win_length,window=self.window, n_mels=64)
+
+        spect = self.torch_mel_spec(torch.Tensor(y))
         spect = np.log1p(spect)
         mean = spect.mean()
         std = spect.std()
