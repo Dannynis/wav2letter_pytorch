@@ -14,8 +14,8 @@ import random
 import glob
 
 from data import label_sets
-from model import Wav2Letter
-from jasper import MiniJasper
+from wav2letter import Wav2Letter
+from jasper import Jasper
 from data.data_loader import SpectrogramDataset, BatchAudioDataLoader
 from decoder import GreedyDecoder, PrefixBeamSearchLMDecoder
 import timing
@@ -53,34 +53,39 @@ parser.add_argument('--max-models-history',default=5,type=int,help='How many mod
 parser.add_argument('--preprocess-specs',default=False,help='To process all the spectrograms before trainng')
 parser.add_argument('--spec-save-folder',default='./specs_dir',type=str,help='where to dump the specs after preprocessing')
 
+parser.add_argument('--optimizer',default='sgd',type=str,help='Optimizer to use. can be either "sgd" (default) or "novograd". Note that novograd only accepts --lr parameter.')
+parser.add_argument('--mel-spec-count',default=0,type=int,help='How many channels to use in Mel Spectrogram')
+parser.add_argument('--use-mel-spec',dest='mel_spec_count',action='store_const',const=64,help='Use mel spectrogram with default value (64)')
 
 def get_audio_conf(args):
     audio_conf = {k:args[k] for k in ['sample_rate','window_size','window_stride','window','preprocess_specs','spec_save_folder']}
     return audio_conf
 
-def init_new_model(arc,kwargs):
+def init_new_model(arc,channels,kwargs):
     labels = label_sets.labels_map[kwargs['labels']]
     audio_conf = get_audio_conf(kwargs)
-    model = arc(labels=labels,audio_conf=audio_conf,mid_layers=kwargs['layers'])
+    model = arc(labels=labels,audio_conf=audio_conf,mid_layers=kwargs['layers'],input_size=channels)
     return model
 
-def init_model(kwargs):
-    arcs_map = {"quartz":MiniJasper,"wav2letter":Wav2Letter}
+def init_model(kwargs,channels):
+    arcs_map = {"quartz":Jasper,"wav2letter":Wav2Letter}
     arc = arcs_map[kwargs['arc']]
     if kwargs['continue_from']:
         model = arc.load_model(kwargs['continue_from'])
     else:
-        model = init_new_model(arc,kwargs)
+        model = init_new_model(arc,channels,kwargs)
     pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('model contains {} trainable params'.format(pytorch_total_params))
     print(model)
     return model
 
-def init_datasets(audio_conf,labels, kwargs):
-    train_dataset = SpectrogramDataset(kwargs['train_manifest'], audio_conf, labels)
+def init_datasets(kwargs):
+    labels = label_sets.labels_map[kwargs['labels']]
+    audio_conf = get_audio_conf(kwargs)
+    train_dataset = SpectrogramDataset(kwargs['train_manifest'], audio_conf, labels,mel_spec=kwargs['mel_spec_count'],use_cuda=kwargs['cuda'])
     batch_sampler = BatchSampler(SequentialSampler(train_dataset), batch_size=kwargs['batch_size'], drop_last=False)
     train_batch_loader = BatchAudioDataLoader(train_dataset, batch_sampler=batch_sampler)
-    eval_dataset = SpectrogramDataset(kwargs['val_manifest'], audio_conf, labels)
+    eval_dataset = SpectrogramDataset(kwargs['val_manifest'], audio_conf, labels,mel_spec=kwargs['mel_spec_count'],use_cuda=kwargs['cuda'])
     return train_dataset, train_batch_loader, eval_dataset
     
 def get_optimizer(params,kwargs):
@@ -92,8 +97,8 @@ def get_optimizer(params,kwargs):
 
 def train(**kwargs):
     print('starting at %s' % time.asctime())
-    model = init_model(kwargs)
-    train_dataset, train_batch_loader, eval_dataset = init_datasets(model.audio_conf, model.labels, kwargs)
+    train_dataset, train_batch_loader, eval_dataset = init_datasets(kwargs)
+    model = init_model(kwargs,train_dataset.data_channels())
     print('Model and datasets initialized')
     if kwargs['tensorboard']:
         setup_tensorboard(kwargs['log_dir'])
@@ -119,10 +124,11 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
             for idx, data in et.across_epoch('Data Loading time', tqdm.tqdm(enumerate(train_batch_loader),total=batch_count)):
                 inputs, input_lengths, targets, target_lengths, file_paths, texts = data
                 with et.timed_action('Model execution time'):
-                    out = model((torch.FloatTensor(inputs).to(device),torch.IntTensor(input_lengths)))
+                    out = model(torch.FloatTensor(inputs).to(device),input_lengths=torch.IntTensor(input_lengths))
                 out = out.transpose(1,0)
                 output_lengths = [l // scaling_factor for l in input_lengths]
                 with et.timed_action('Loss and BP time'):
+                    print(inputs.shape,out.shape,targets.shape,output_lengths,target_lengths)
                     loss = criterion(out, targets.to(device), torch.IntTensor(output_lengths), torch.IntTensor(target_lengths))
                     if idx % 50 == 0:
                         print (loss.mean().item())
@@ -159,15 +165,14 @@ def compute_error_rates(model,dataset,greedy_decoder,kwargs):
         greedy_wer = np.zeros(num_samples)
         for idx, (data) in enumerate(dataset):
             inputs, targets, file_paths, text = data
-            out = model((torch.FloatTensor(inputs,).unsqueeze(0).to(device), torch.IntTensor([inputs.shape[1]])))
-            out = out.transpose(1,0)
-            out_sizes = torch.IntTensor([out.size(0)])
+            out = model(torch.FloatTensor(inputs,).unsqueeze(0).to(device), input_lengths=torch.IntTensor([inputs.shape[1]]))
+            out_sizes = torch.IntTensor([out.size(1)])
             if idx == index_to_print and kwargs['print_samples']:
                 print('Validation case')
                 print(text)
-                print(''.join(map(lambda i: model.labels[i], torch.argmax(out.squeeze(), 1))))
+                print(''.join(map(lambda i: model.labels[i], torch.argmax(out.transpose(1,0).squeeze(), 1))))
             
-            greedy_texts = greedy_decoder.decode(probs=out.transpose(1,0), sizes=out_sizes)
+            greedy_texts = greedy_decoder.decode(probs=out, sizes=out_sizes)
             if idx < 5:
                 print ('original text: {} greedy text: {}'.format(text,greedy_texts[0]))
             greedy_cer[idx] = greedy_decoder.cer_ratio(text, greedy_texts[0])

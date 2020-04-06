@@ -87,7 +87,7 @@ class Wav2Letter(nn.Module):
         conv_blocks.append(('conv1d_{}'.format(len(layers)),last_layer))
         self.conv1ds = nn.Sequential(OrderedDict(conv_blocks))
 
-    def forward(self, x):
+    def forward(self, x,input_lengths=None):
         x = self.conv1ds(x)
         x = x.transpose(1,2)
         if self.training:
@@ -127,3 +127,4 @@ class Wav2Letter(nn.Module):
     @staticmethod
     def get_param_size(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
