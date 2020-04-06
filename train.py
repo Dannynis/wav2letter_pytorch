@@ -52,13 +52,12 @@ parser.add_argument('--epochs-per-eval',default=5,type=int,help='How many epochs
 parser.add_argument('--max-models-history',default=5,type=int,help='How many models to keep saved before overwriting')
 parser.add_argument('--preprocess-specs',default=False,help='To process all the spectrograms before trainng')
 parser.add_argument('--spec-save-folder',default='./specs_dir',type=str,help='where to dump the specs after preprocessing')
-
-parser.add_argument('--optimizer',default='sgd',type=str,help='Optimizer to use. can be either "sgd" (default) or "novograd". Note that novograd only accepts --lr parameter.')
 parser.add_argument('--mel-spec-count',default=0,type=int,help='How many channels to use in Mel Spectrogram')
 parser.add_argument('--use-mel-spec',dest='mel_spec_count',action='store_const',const=64,help='Use mel spectrogram with default value (64)')
+parser.add_argument('--n-fft', default=512,help='size of fft window after padding')
 
 def get_audio_conf(args):
-    audio_conf = {k:args[k] for k in ['sample_rate','window_size','window_stride','window','preprocess_specs','spec_save_folder']}
+    audio_conf = {k:args[k] for k in ['sample_rate','window_size','window_stride','window','preprocess_specs','spec_save_folder','n_fft']}
     return audio_conf
 
 def init_new_model(arc,channels,kwargs):
@@ -128,7 +127,7 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
                 out = out.transpose(1,0)
                 output_lengths = [l // scaling_factor for l in input_lengths]
                 with et.timed_action('Loss and BP time'):
-                    print(inputs.shape,out.shape,targets.shape,output_lengths,target_lengths)
+                    # print(inputs.shape,out.shape,targets.shape,output_lengths,target_lengths)
                     loss = criterion(out, targets.to(device), torch.IntTensor(output_lengths), torch.IntTensor(target_lengths))
                     if idx % 50 == 0:
                         print (loss.mean().item())

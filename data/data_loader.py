@@ -60,12 +60,13 @@ class SpectrogramDataset(Dataset):
         self.window = windows.get(audio_conf['window'], windows['hamming'])
         self.use_cuda = use_cuda
         self.mel_spec = mel_spec
+        self.n_fft = audio_conf['n_fft']
         self.labels_map = dict([(labels[i],i) for i in range(len(labels))])
         self.validate_sample_rate()
         self.audio_conf = audio_conf
         self.spects = None
         #todo export nfft and n mels to config
-        self.torch_mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate,n_fft=512,n_mels=64)
+        self.torch_mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate,n_fft=self.n_fft,n_mels=self.mel_spec)
         if self.audio_conf['preprocess_specs']:
             self.preprocess_spectrograms()
 
@@ -114,9 +115,7 @@ class SpectrogramDataset(Dataset):
     def _get_spect(self,audio,n_fft,hop_length,win_length):
         if self.use_cuda: # Use torch based convolutions to compute the STFT
             if self.mel_spec:
-                import torchaudio
-                transform = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate,n_fft=n_fft,n_mels=self.mel_spec)
-                return transform(torch.Tensor(audio))
+                return self.torch_mel_spec(torch.Tensor(audio))
 
             e=torch.stft(torch.FloatTensor(audio),n_fft,hop_length,win_length,window=torch.hamming_window(win_length))
             magnitudes = (e ** 2).sum(dim=2) ** 0.5
@@ -137,10 +136,6 @@ class SpectrogramDataset(Dataset):
         n_fft = int(self.sample_rate * self.window_size)
         win_length = n_fft
         hop_length = int(self.sample_rate * self.window_stride)
-
-        D = librosa.stft(y, n_fft=n_fft, hop_length = hop_length, win_length=win_length,window=self.window)
-
-        spect, phase = librosa.magphase(D)
         spect = self._get_spect(y,n_fft=n_fft,hop_length=hop_length,win_length=win_length)
         spect = np.log1p(spect)
         mean = spect.mean()

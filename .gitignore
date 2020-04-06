@@ -137,3 +137,4 @@ dmypy.json
 # Folders created by scripts
 visualize/
 models/
+.idea/
