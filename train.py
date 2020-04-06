@@ -136,7 +136,7 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
                     optimizer.step()
                 total_loss += loss.mean().item()
             log_loss_to_tensorboard(epoch, total_loss / batch_count)
-            evaluate(model,eval_dataset,greedy_decoder,epoch,kwargs)
+            evaluate(model = model,dataset = eval_dataset,setname='eval',greedy_decoder = greedy_decoder,epoch=epoch,kwargs=kwargs)
             if epoch != 0 and epoch % kwargs['epochs_per_save'] == 0 :
                 save_epoch_model(model,epoch, kwargs['model_dir'])
             if epoch % int(kwargs['epochs_per_eval']) == 0:
