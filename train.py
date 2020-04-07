@@ -129,6 +129,18 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
                 with et.timed_action('Loss and BP time'):
                     # print(inputs.shape,out.shape,targets.shape,output_lengths,target_lengths)
                     loss = criterion(out, targets.to(device), torch.IntTensor(output_lengths), torch.IntTensor(target_lengths))
+                    if torch.isnan(inputs).any() :
+                        print ('BAD BAD INPUTS')
+                        pass
+                    if torch.isinf(loss).any():
+                        print ('loss is inf')
+                        continue
+
+                    if torch.isnan(loss).any():
+                        print ('losss is nan')
+                        continue
+
+
                     if idx % 50 == 0:
                         print (loss.mean().item())
                     optimizer.zero_grad()

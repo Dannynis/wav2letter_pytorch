@@ -17,13 +17,17 @@ import multiprocessing.dummy
 import pickle
 import datetime
 import torchaudio
+import traceback
 
 
 windows = {'hamming': scipy.signal.hamming, 'hann': scipy.signal.hann, 'blackman': scipy.signal.blackman,'bartlett':scipy.signal.bartlett}
 
 def load_audio(path):
-    sr, sound = wavfile.read(path)
-    sound = sound.astype('float32') / (2**15 -1)
+    # sr, sound = wavfile.read(path)
+    sound, sr = librosa.load(path, sr=None)
+    if len(sound) < 10000:
+        raise
+    # sound = sound.astype('float32') / (2**15 -1)
     if len(sound.shape) > 1:
         if sound.shape[1] == 1:
             sound = sound.squeeze()
@@ -99,19 +103,26 @@ class SpectrogramDataset(Dataset):
         #     self.spects[i] = spect
 
     def __getitem__(self, index):
-        sample = self.df.iloc[index]
-        audio_path, transcript = sample.filepath, sample.text
-        if 'א' in self.labels_map: #Hebrew!
-            import data.language_specific_tools
-            transcript = data.language_specific_tools.hebrew_final_to_normal(transcript)
-        #if the specs were generated during preprocess use them otherwise generate during traning
-        if self.spects != None:
-            spect = self.spects[index]
-        else:
-            spect = self.parse_audio(audio_path)
-        target = list(filter(None,[self.labels_map.get(x) for x in list(transcript)]))
-        return spect, target, audio_path, transcript
-    
+        while index <= len(self.df):
+            try:
+                sample = self.df.iloc[index]
+                audio_path, transcript = sample.filepath, sample.text
+                if 'א' in self.labels_map: #Hebrew!
+                    import data.language_specific_tools
+                    transcript = data.language_specific_tools.hebrew_final_to_normal(transcript)
+                #if the specs were generated during preprocess use them otherwise generate during traning
+                if self.spects != None:
+                    spect = self.spects[index]
+                else:
+                    spect = self.parse_audio(audio_path)
+                target = list(filter(None,[self.labels_map.get(x) for x in list(transcript)]))
+                return spect, target, audio_path, transcript
+            except:
+                print ('Error on wav {} index {} '.format(audio_path,index))
+                print (traceback.format_exc())
+                print ('Droping..')
+                self.df = self.df.drop(index)
+
     def _get_spect(self,audio,n_fft,hop_length,win_length):
         if self.use_cuda: # Use torch based convolutions to compute the STFT
             if self.mel_spec:
