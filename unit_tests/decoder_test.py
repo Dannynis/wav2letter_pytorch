@@ -9,6 +9,7 @@ from decoder import PrefixBeamSearchLMDecoder, prefix_beam_search, GreedyDecoder
 from data.label_sets import english_labels
 
 def greedy_decode(samples, labels, blank_index=0,sizes=None):
+    #todo export initializer outside of function
     greedy_decoder = GreedyDecoder(labels, blank_index=blank_index)
     res = greedy_decoder.decode(torch.FloatTensor(samples).unsqueeze(0), sizes=sizes)
     return res[0]

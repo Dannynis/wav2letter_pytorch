@@ -15,7 +15,7 @@ import pandas as pd
 import tqdm
 import multiprocessing.dummy
 import pickle
-import datetime
+from datetime import datetime
 import torchaudio
 import traceback
 
@@ -25,8 +25,6 @@ windows = {'hamming': scipy.signal.hamming, 'hann': scipy.signal.hann, 'blackman
 def load_audio(path):
     # sr, sound = wavfile.read(path)
     sound, sr = librosa.load(path, sr=None)
-    if len(sound) < 10000:
-        raise
     # sound = sound.astype('float32') / (2**15 -1)
     if len(sound.shape) > 1:
         if sound.shape[1] == 1:
@@ -69,33 +67,46 @@ class SpectrogramDataset(Dataset):
         self.validate_sample_rate()
         self.audio_conf = audio_conf
         self.spects = None
-        #todo export nfft and n mels to config
-        self.torch_mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate,n_fft=self.n_fft,n_mels=self.mel_spec)
+        #todo export nfft and n mels to configxcc
+        self.torch_mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate,
+                                                                   n_fft=self.n_fft,hop_length=int(self.n_fft/2),n_mels=self.mel_spec).to('cuda')
+        self.preprocess = audio_conf['preprocess_specs']
         if self.audio_conf['preprocess_specs']:
             self.preprocess_spectrograms()
 
     def async_preprocess_spectrogram(self,x):
+        saved_specs_folder = self.audio_conf['spec_save_folder']
+        current_spectrograms_file_name = str(x)
         audio_path = self.df.filepath.iloc[x]
-        return self.parse_audio(audio_path)
+        spect =  self.parse_audio(audio_path)
+        with open(os.path.join(saved_specs_folder, current_spectrograms_file_name),'wb') as f:
+            pickle.dump(spect, f)
+
+        return 0
+        #todo add arg optional return to ram
+
+    def load_spect_from_dir(self,index):
+        saved_specs_folder = self.audio_conf['spec_save_folder']
+        current_spectrograms_file_name = str(index)
+        with open(os.path.join(saved_specs_folder, current_spectrograms_file_name),'rb') as f:
+            return pickle.load(f)
 
     def preprocess_spectrograms(self):
-
-        saved_specs_folder = self.audio_conf['spec_save_folder']
-        if not os.path.exists(saved_specs_folder):
-            os.makedirs(saved_specs_folder)
-        saved_specs = os.listdir(saved_specs_folder)
-        if len(saved_specs) != 0:
-            restored_file_name =saved_specs[-1]
-            print('restoring spectrograms from {}'.format(restored_file_name))
-            with open(os.path.join(saved_specs_folder,restored_file_name)) as f:
-                self.spects = pickle.load(f)
-        else:
+        # self.spects = {}
+            saved_specs_folder = self.audio_conf['spec_save_folder']
+            if not os.path.exists(saved_specs_folder):
+                os.makedirs(saved_specs_folder)
+        # saved_specs = os.listdir(saved_specs_folder)
+        # if len(saved_specs) != 0:
+        #     saved_specs_suffix = list(map(lambda x: x.split('_')[0],saved_specs))
+        #     for i in tqdm.tqdm(range(self.size)):
+        #         restored_file_name =saved_specs[saved_specs_suffix.index(i)]
+        #         with open(os.path.join(saved_specs_folder,restored_file_name)) as f:
+        #             self.spects[i] = pickle.load(f)
+        # else:
             print ('running multiprocesses spec extraction')
             pool = multiprocessing.dummy.Pool(4)
             self.spects = list(tqdm.tqdm(pool.imap(self.async_preprocess_spectrogram,range(self.size)),total=self.size))
-            current_spectrograms_file_name = str(datetime.now()).replace(' ','_').split('.')[0]
-            with open(os.path.join(saved_specs_folder,current_spectrograms_file_name)) as f:
-                pickle.dump( self.spects,f)
 
         # for i in tqdm.tqdm(range(self.size)):
         #     audio_path = self.df.filepath.iloc[i]
@@ -103,7 +114,6 @@ class SpectrogramDataset(Dataset):
         #     self.spects[i] = spect
 
     def __getitem__(self, index):
-        while index <= len(self.df):
             try:
                 sample = self.df.iloc[index]
                 audio_path, transcript = sample.filepath, sample.text
@@ -113,6 +123,8 @@ class SpectrogramDataset(Dataset):
                 #if the specs were generated during preprocess use them otherwise generate during traning
                 if self.spects != None:
                     spect = self.spects[index]
+                elif self.preprocess:
+                    spect = self.load_spect_from_dir(index)
                 else:
                     spect = self.parse_audio(audio_path)
                 target = list(filter(None,[self.labels_map.get(x) for x in list(transcript)]))
@@ -121,12 +133,12 @@ class SpectrogramDataset(Dataset):
                 print ('Error on wav {} index {} '.format(audio_path,index))
                 print (traceback.format_exc())
                 print ('Droping..')
-                self.df = self.df.drop(index)
+                return None
 
     def _get_spect(self,audio,n_fft,hop_length,win_length):
         if self.use_cuda: # Use torch based convolutions to compute the STFT
             if self.mel_spec:
-                return self.torch_mel_spec(torch.Tensor(audio))
+                return self.torch_mel_spec(torch.Tensor(audio).to('cuda')).to('cpu')
 
             e=torch.stft(torch.FloatTensor(audio),n_fft,hop_length,win_length,window=torch.hamming_window(win_length))
             magnitudes = (e ** 2).sum(dim=2) ** 0.5
@@ -170,6 +182,7 @@ class SpectrogramDataset(Dataset):
         return self.mel_spec or int(1+(int(self.sample_rate * self.window_size)/2))
 
 def _collator(batch):
+    batch = [sample for sample in batch if sample != None]
     inputs, targets, file_paths, texts = zip(*batch)
     input_lengths = list(map(lambda input: input.shape[1], inputs))
     target_lengths = list(map(len,targets))

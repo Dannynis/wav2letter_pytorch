@@ -45,16 +45,16 @@ parser.add_argument('--labels',default='english',type=str,help='Name of label se
 parser.add_argument('--print-samples',default=False,action='store_true',help='Print samples from each epoch')
 parser.add_argument('--continue-from',default='',type=str,help='Continue training a saved model')
 parser.add_argument('--cuda',default=False,action='store_true',help='Enable training and evaluation with GPU')
-parser.add_argument('--epochs-per-save',default=5,type=int,help='How many epochs before saving models')
+parser.add_argument('--steps-per-save',default=1000,type=int,help='How many epochs before saving models')
 parser.add_argument('--arc',default='quartz',type=str,help='Network architecture to use. Can be either "quartz" (default) or "wav2letter"')
 parser.add_argument('--optimizer',default='novograd',type=str,help='Optimizer to use. can be either "sgd" (default) or "novograd". Note that novograd only accepts --lr parameter.')
-parser.add_argument('--epochs-per-eval',default=5,type=int,help='How many epochs before evaluating the WER and CER')
+parser.add_argument('--steps-per-eval',default=200,type=int,help='How many epochs before evaluating the WER and CER')
 parser.add_argument('--max-models-history',default=5,type=int,help='How many models to keep saved before overwriting')
-parser.add_argument('--preprocess-specs',default=False,help='To process all the spectrograms before trainng')
+parser.add_argument('--preprocess-specs',default=False,action='store_true',help='To process all the spectrograms before trainng')
 parser.add_argument('--spec-save-folder',default='./specs_dir',type=str,help='where to dump the specs after preprocessing')
 parser.add_argument('--mel-spec-count',default=0,type=int,help='How many channels to use in Mel Spectrogram')
 parser.add_argument('--use-mel-spec',dest='mel_spec_count',action='store_const',const=64,help='Use mel spectrogram with default value (64)')
-parser.add_argument('--n-fft', default=512,help='size of fft window after padding')
+parser.add_argument('--n-fft', default=256, help='size of fft window after padding')
 
 def get_audio_conf(args):
     audio_conf = {k:args[k] for k in ['sample_rate','window_size','window_stride','window','preprocess_specs','spec_save_folder','n_fft']}
@@ -83,7 +83,8 @@ def init_datasets(kwargs):
     audio_conf = get_audio_conf(kwargs)
     train_dataset = SpectrogramDataset(kwargs['train_manifest'], audio_conf, labels,mel_spec=kwargs['mel_spec_count'],use_cuda=kwargs['cuda'])
     batch_sampler = BatchSampler(SequentialSampler(train_dataset), batch_size=kwargs['batch_size'], drop_last=False)
-    train_batch_loader = BatchAudioDataLoader(train_dataset, batch_sampler=batch_sampler)
+    #todo arg of num of worker and warn from cuda and without preprocess
+    train_batch_loader = BatchAudioDataLoader(train_dataset, batch_sampler=batch_sampler,num_workers=10)
     eval_dataset = SpectrogramDataset(kwargs['val_manifest'], audio_conf, labels,mel_spec=kwargs['mel_spec_count'],use_cuda=kwargs['cuda'])
     return train_dataset, train_batch_loader, eval_dataset
     
@@ -116,6 +117,7 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
     epochs=kwargs['epochs']
     print('Train dataset size:%d' % len(train_dataset))
     batch_count = math.ceil(len(train_dataset) / kwargs['batch_size'])
+    step = 0
     for epoch in range(epochs):
         with timing.EpochTimer(epoch,_log_to_tensorboard) as et:
             model.train()
@@ -131,7 +133,7 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
                     loss = criterion(out, targets.to(device), torch.IntTensor(output_lengths), torch.IntTensor(target_lengths))
                     if torch.isnan(inputs).any() :
                         print ('BAD BAD INPUTS')
-                        pass
+                        continue
                     if torch.isinf(loss).any():
                         print ('loss is inf')
                         continue
@@ -140,21 +142,23 @@ def training_loop(model, kwargs, train_dataset, train_batch_loader, eval_dataset
                         print ('losss is nan')
                         continue
 
-
+                    loss_mean = loss.mean()
                     if idx % 50 == 0:
-                        print (loss.mean().item())
+                        print ('loss {}'.format(loss_mean))
                     optimizer.zero_grad()
-                    loss.mean().backward()
+                    loss_mean.backward()
                     optimizer.step()
-                total_loss += loss.mean().item()
-            log_loss_to_tensorboard(epoch, total_loss / batch_count)
-            if epoch != 0 and epoch % kwargs['epochs_per_save'] == 0 :
-                save_epoch_model(model,epoch, kwargs['model_dir'])
-            if epoch % int(kwargs['epochs_per_eval']) == 0:
-                evaluate(model,'eval',eval_dataset, greedy_decoder, epoch, kwargs)
-                evaluate(model,'train',train_dataset, greedy_decoder, epoch, kwargs)
-            if epoch % int(kwargs['epochs_per_save']) == 0:
-                save_epoch_model(model,epoch% kwargs['max_models_history'], kwargs['model_dir'])
+
+                if step != 0 and step % kwargs['steps_per_save'] == 0 :
+                    save_epoch_model(model,epoch, kwargs['model_dir'])
+                if step % int(kwargs['steps_per_eval']) == 0:
+                    log_loss_to_tensorboard(epoch, loss_mean)
+
+                    evaluate(model,'eval',eval_dataset, greedy_decoder, epoch, kwargs)
+                    evaluate(model,'train',train_dataset, greedy_decoder, epoch, kwargs)
+                if step % int(kwargs['steps_per_save']) == 0:
+                    save_epoch_model(model,step% kwargs['max_models_history'], kwargs['model_dir'])
+                step += 1
     if kwargs['model_dir']:
         save_model(model, kwargs['model_dir']+'/final.pth')
     print('Finished at %s' % time.asctime())
@@ -175,18 +179,15 @@ def compute_error_rates(model,dataset,greedy_decoder,kwargs):
         greedy_wer = np.zeros(num_samples)
         for idx, (data) in enumerate(dataset):
             inputs, targets, file_paths, text = data
-            out = model(torch.FloatTensor(inputs,).unsqueeze(0).to(device), input_lengths=torch.IntTensor([inputs.shape[1]]))
-            out_sizes = torch.IntTensor([out.size(1)])
-            if idx == index_to_print and kwargs['print_samples']:
-                print('Validation case')
-                print(text)
-                print(''.join(map(lambda i: model.labels[i], torch.argmax(out.transpose(1,0).squeeze(), 1))))
-            
-            greedy_texts = greedy_decoder.decode(probs=out, sizes=out_sizes)
-            if idx < 5:
-                print ('original text: {} greedy text: {}'.format(text,greedy_texts[0]))
-            greedy_cer[idx] = greedy_decoder.cer_ratio(text, greedy_texts[0])
-            greedy_wer[idx] = greedy_decoder.wer_ratio(text, greedy_texts[0])
+            # out = model(torch.FloatTensor(inputs,).unsqueeze(0).to(device), input_lengths=torch.IntTensor([inputs.shape[1]]))
+            # out_sizes = torch.IntTensor([out.size(1)])
+            # greedy_texts = greedy_decoder.decode(probs=out, sizes=out_sizes)
+            # if idx < 5:
+            #     print ('original text: {} greedy text: {}'.format(text,greedy_texts[0]))
+            # greedy_cer[idx] = greedy_decoder.cer_ratio(text, greedy_texts[0])
+            # greedy_wer[idx] = greedy_decoder.wer_ratio(text, greedy_texts[0])
+            if idx % int(num_samples/4) == 0 :
+                print ('evaluated {}%'.format(float(idx/num_samples)*100))
     return greedy_cer, greedy_wer
 
 _tensorboard_writer = None
@@ -197,8 +198,8 @@ def setup_tensorboard(log_dir):
     _tensorboard_writer = SummaryWriter(log_dir)
     
 def log_loss_to_tensorboard(epoch,avg_loss):
-    print('Total loss: %f' % avg_loss)
-    _log_to_tensorboard(epoch,{'Avg Train Loss': avg_loss})
+    print('Batch loss: %f' % avg_loss)
+    _log_to_tensorboard(epoch,{'Batch Train Loss': avg_loss})
     
 def log_error_rates_to_tensorboard(epoch,set,greedy_cer,greedy_wer):
     _log_to_tensorboard(epoch,{set+'_'+'G_CER': greedy_cer, set+'_'+'G_WER': greedy_wer})
